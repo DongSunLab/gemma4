@@ -34,7 +34,7 @@ from utils import BatchSize, DummyRequest, JobInput, create_error_response
 
 class vLLMEngine:
     def __init__(self, engine=None):
-        load_dotenv()  # For local development
+        load_dotenv()
         self.engine_args = get_engine_args()
         logging.info(f"Engine args: {self.engine_args}")
 
@@ -65,55 +65,53 @@ class vLLMEngine:
     def _get_tokenizer_for_chat_template(self):
         if self.tokenizer is not None:
             return self.tokenizer
-        else:
-            try:
-                from transformers import AutoTokenizer
 
-                tokenizer = AutoTokenizer.from_pretrained(
-                    self.engine_args.tokenizer or self.engine_args.model,
-                    revision=self.engine_args.tokenizer_revision or "main",
-                    trust_remote_code=self.engine_args.trust_remote_code,
-                )
+        try:
+            from transformers import AutoTokenizer
 
-                class MinimalTokenizerWrapper:
-                    def __init__(self, tokenizer):
-                        self.tokenizer = tokenizer
-                        self.custom_chat_template = os.getenv("CUSTOM_CHAT_TEMPLATE")
-                        self.has_chat_template = bool(
-                            self.tokenizer.chat_template
-                        ) or bool(self.custom_chat_template)
-                        if (
-                            self.custom_chat_template
-                            and isinstance(self.custom_chat_template, str)
-                        ):
-                            self.tokenizer.chat_template = self.custom_chat_template
+            tokenizer = AutoTokenizer.from_pretrained(
+                self.engine_args.tokenizer or self.engine_args.model,
+                revision=self.engine_args.tokenizer_revision or "main",
+                trust_remote_code=self.engine_args.trust_remote_code,
+            )
 
-                    def apply_chat_template(self, input_data, chat_template_kwargs=None):
-                        if isinstance(input_data, list):
-                            if not self.has_chat_template:
-                                raise ValueError(
-                                    "Chat template does not exist for this model, "
-                                    "you must provide a single string input instead of a list of messages"
-                                )
-                        elif isinstance(input_data, str):
-                            input_data = [{"role": "user", "content": input_data}]
-                        else:
+            class MinimalTokenizerWrapper:
+                def __init__(self, tokenizer):
+                    self.tokenizer = tokenizer
+                    self.custom_chat_template = os.getenv("CUSTOM_CHAT_TEMPLATE")
+                    self.has_chat_template = bool(
+                        self.tokenizer.chat_template
+                    ) or bool(self.custom_chat_template)
+                    if (
+                        self.custom_chat_template
+                        and isinstance(self.custom_chat_template, str)
+                    ):
+                        self.tokenizer.chat_template = self.custom_chat_template
+
+                def apply_chat_template(self, input_data, chat_template_kwargs=None):
+                    if isinstance(input_data, list):
+                        if not self.has_chat_template:
                             raise ValueError(
-                                "Input must be a string or a list of messages"
+                                "Chat template does not exist for this model, "
+                                "you must provide a single string input instead of a list of messages"
                             )
+                    elif isinstance(input_data, str):
+                        input_data = [{"role": "user", "content": input_data}]
+                    else:
+                        raise ValueError("Input must be a string or a list of messages")
 
-                        chat_template_kwargs = chat_template_kwargs or {}
-                        return self.tokenizer.apply_chat_template(
-                            input_data,
-                            tokenize=False,
-                            add_generation_prompt=True,
-                            **chat_template_kwargs,
-                        )
+                    chat_template_kwargs = chat_template_kwargs or {}
+                    return self.tokenizer.apply_chat_template(
+                        input_data,
+                        tokenize=False,
+                        add_generation_prompt=True,
+                        **chat_template_kwargs,
+                    )
 
-                return MinimalTokenizerWrapper(tokenizer)
-            except Exception as e:
-                logging.error(f"Failed to create fallback tokenizer: {e}")
-                raise e
+            return MinimalTokenizerWrapper(tokenizer)
+        except Exception as e:
+            logging.error(f"Failed to create fallback tokenizer: {e}")
+            raise e
 
     async def generate(self, job_input: JobInput):
         try:
@@ -142,7 +140,7 @@ class vLLMEngine:
         chat_template_kwargs,
         request_id,
         batch_size_growth_factor,
-        min_batch_size: str,
+        min_batch_size,
     ) -> AsyncGenerator[dict, None]:
         if apply_chat_template or isinstance(llm_input, list):
             tokenizer_wrapper = self._get_tokenizer_for_chat_template()
@@ -156,15 +154,14 @@ class vLLMEngine:
             validated_sampling_params,
             request_id,
         )
+
         n_responses = validated_sampling_params.n
         n_input_tokens = 0
         is_first_output = True
         last_output_texts = ["" for _ in range(n_responses)]
         token_counters = {"batch": 0, "total": 0}
 
-        batch = {
-            "choices": [{"tokens": []} for _ in range(n_responses)],
-        }
+        batch = {"choices": [{"tokens": []} for _ in range(n_responses)]}
 
         max_batch_size = batch_size or self.default_batch_size
         batch_size_growth_factor = (
@@ -198,7 +195,7 @@ class vLLMEngine:
                         }
                         yield batch
                         batch = {
-                            "choices": [{"tokens": []} for _ in range(n_responses)],
+                            "choices": [{"tokens": []} for _ in range(n_responses)]
                         }
                         token_counters["batch"] = 0
                         batch_size_obj.update()
@@ -255,6 +252,11 @@ class OpenAIvLLMEngine(vLLMEngine):
             self.raw_openai_output = raw_output_env.lower() == "true"
         else:
             self.raw_openai_output = bool(int(raw_output_env))
+
+        self.chat_engine = None
+        self.completion_engine = None
+        self.serving_models = None
+        self.model_config = None
 
     def _load_lora_adapters(self):
         adapters = []
@@ -362,7 +364,10 @@ class OpenAIvLLMEngine(vLLMEngine):
             ),
             "openai_serving_render": openai_serving_render,
         }
-        chat_kwargs = self._filter_kwargs_for_callable(OpenAIServingChat, chat_kwargs)
+        chat_kwargs = self._filter_kwargs_for_callable(
+            OpenAIServingChat,
+            chat_kwargs,
+        )
         self.chat_engine = OpenAIServingChat(**chat_kwargs)
 
         completion_kwargs = {
@@ -384,23 +389,48 @@ class OpenAIvLLMEngine(vLLMEngine):
             OpenAIServingCompletion,
             completion_kwargs,
         )
-        self.completion_engine = OpenAIServingCompletion(**completion_kwargs)
+        try:
+            self.completion_engine = OpenAIServingCompletion(**completion_kwargs)
+        except Exception as e:
+            logging.warning(f"OpenAIServingCompletion init skipped: {e}")
+            self.completion_engine = None
 
-        if hasattr(self.chat_engine, "warmup"):
-            await self.chat_engine.warmup()
+        warmup_fn = getattr(self.chat_engine, "warmup", None)
+        if callable(warmup_fn):
+            warmup_result = warmup_fn()
+            if inspect.isawaitable(warmup_result):
+                await warmup_result
 
     async def generate(self, openai_request: JobInput):
         await self._ensure_engines_initialized()
 
         if openai_request.openai_route == "/v1/models":
-            yield await self._handle_model_request()
-        elif openai_request.openai_route in ["/v1/chat/completions", "/v1/completions"]:
+            model_result = self._handle_model_request()
+            if inspect.isawaitable(model_result):
+                model_result = await model_result
+            yield model_result
+            return
+
+        if openai_request.openai_route == "/v1/chat/completions":
             async for response in self._handle_chat_or_completion_request(
                 openai_request
             ):
                 yield response
-        else:
-            yield create_error_response("Invalid route").model_dump()
+            return
+
+        if openai_request.openai_route == "/v1/completions":
+            if self.completion_engine is None:
+                yield create_error_response(
+                    "Completions route unavailable in this build; use /v1/chat/completions"
+                ).model_dump()
+                return
+            async for response in self._handle_chat_or_completion_request(
+                openai_request
+            ):
+                yield response
+            return
+
+        yield create_error_response("Invalid route").model_dump()
 
     async def _handle_model_request(self):
         models = await self.serving_models.show_available_models()
@@ -411,6 +441,11 @@ class OpenAIvLLMEngine(vLLMEngine):
             request_class = ChatCompletionRequest
             generator_function = self.chat_engine.create_chat_completion
         elif openai_request.openai_route == "/v1/completions":
+            if self.completion_engine is None:
+                yield create_error_response(
+                    "Completions route unavailable in this build; use /v1/chat/completions"
+                ).model_dump()
+                return
             request_class = CompletionRequest
             generator_function = self.completion_engine.create_completion
         else:
@@ -424,47 +459,57 @@ class OpenAIvLLMEngine(vLLMEngine):
             return
 
         dummy_request = DummyRequest()
-        response_generator = await generator_function(
+        response_or_coro = generator_function(
             request,
             raw_request=dummy_request,
+        )
+        response_generator = (
+            await response_or_coro
+            if inspect.isawaitable(response_or_coro)
+            else response_or_coro
         )
 
         if (
             not openai_request.openai_input.get("stream")
             or isinstance(response_generator, ErrorResponse)
         ):
-            yield response_generator.model_dump()
-        else:
-            batch = []
-            batch_token_counter = 0
-            batch_size_obj = BatchSize(
-                self.default_batch_size,
-                self.min_batch_size,
-                self.batch_size_growth_factor,
-            )
+            if hasattr(response_generator, "model_dump"):
+                yield response_generator.model_dump()
+            else:
+                yield response_generator
+            return
 
-            async for chunk_str in response_generator:
-                if "data" in chunk_str:
-                    if self.raw_openai_output:
-                        data = chunk_str
-                    elif "[DONE]" in chunk_str:
-                        continue
-                    else:
-                        data = json.loads(
-                            chunk_str.removeprefix("data: ").rstrip("\n\n")
-                        )
-                    batch.append(data)
-                    batch_token_counter += 1
+        batch = []
+        batch_token_counter = 0
+        batch_size_obj = BatchSize(
+            self.default_batch_size,
+            self.min_batch_size,
+            self.batch_size_growth_factor,
+        )
 
-                    if batch_token_counter >= batch_size_obj.current_batch_size:
-                        if self.raw_openai_output:
-                            batch = "".join(batch)
-                        yield batch
-                        batch = []
-                        batch_token_counter = 0
-                        batch_size_obj.update()
-
-            if batch:
+        async for chunk_str in response_generator:
+            if "data" in chunk_str:
                 if self.raw_openai_output:
-                    batch = "".join(batch)
-                yield batch
+                    data = chunk_str
+                elif "[DONE]" in chunk_str:
+                    continue
+                else:
+                    data = json.loads(
+                        chunk_str.removeprefix("data: ").rstrip("\n\n")
+                    )
+
+                batch.append(data)
+                batch_token_counter += 1
+
+                if batch_token_counter >= batch_size_obj.current_batch_size:
+                    if self.raw_openai_output:
+                        batch = "".join(batch)
+                    yield batch
+                    batch = []
+                    batch_token_counter = 0
+                    batch_size_obj.update()
+
+        if batch:
+            if self.raw_openai_output:
+                batch = "".join(batch)
+            yield batch
