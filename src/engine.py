@@ -378,6 +378,7 @@ class OpenAIvLLMEngine(vLLMEngine):
             "enable_force_include_usage": (
                 os.getenv("ENABLE_FORCE_INCLUDE_USAGE", "false").lower() == "true"
             ),
+            "openai_serving_render": openai_serving_render,
         }
         completion_kwargs = self._filter_kwargs_for_callable(
             OpenAIServingCompletion,
