@@ -14,7 +14,7 @@ async def handler(job):
     try:
         from utils import JobInput
 
-        job_input = JobInput(**job["input"])
+        job_input = JobInput(job["input"])
         engine = openai_engine if job_input.openai_route else vllm_engine
 
         results_generator = engine.generate(job_input)
