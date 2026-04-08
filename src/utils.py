@@ -47,7 +47,10 @@ def count_physical_cores():
 
 class JobInput:
     def __init__(self, job):
-        self.llm_input = job.get("messages", job.get("prompt"))
+        self.llm_input = job.get(
+            "llm_input",
+            job.get("messages", job.get("prompt"))
+        )
         self.stream = job.get("stream", False)
         self.max_batch_size = job.get("max_batch_size")
         self.apply_chat_template = job.get("apply_chat_template", False)
@@ -71,7 +74,6 @@ class JobInput:
 
         self.openai_route = job.get("openai_route")
         self.openai_input = job.get("openai_input")
-
 
 class DummyState:
     def __init__(self):
