@@ -13,11 +13,14 @@ openai_engine = None
 async def handler(job):
     try:
         from utils import JobInput
-        job_input = JobInput(job["input"])
+
+        job_input = JobInput(**job["input"])
         engine = openai_engine if job_input.openai_route else vllm_engine
+
         results_generator = engine.generate(job_input)
         async for batch in results_generator:
             yield batch
+
     except Exception as e:
         error_str = str(e)
         full_traceback = traceback.format_exc()
@@ -25,7 +28,6 @@ async def handler(job):
         log.error(f"Error during inference: {error_str}")
         log.error(f"Full traceback:\n{full_traceback}")
 
-        # CUDA errors = worker is broken, exit to let RunPod spin up a healthy one
         if "CUDA" in error_str or "cuda" in error_str:
             log.error("Terminating worker due to CUDA/GPU error")
             sys.exit(1)
@@ -33,9 +35,7 @@ async def handler(job):
         yield {"error": error_str}
 
 
-# Only run in main process to prevent re-initialization when vLLM spawns worker subprocesses
 if __name__ == "__main__" or multiprocessing.current_process().name == "MainProcess":
-
     try:
         from engine import vLLMEngine, OpenAIvLLMEngine
 
